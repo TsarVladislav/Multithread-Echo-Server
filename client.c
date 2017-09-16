@@ -69,18 +69,17 @@ int main(int argc, char *argv[])
     printf("enter something: ");
     fgets (buf, MAXDATASIZE, stdin);
     */
-    sprintf(buf, "asdasd");
+    sprintf(buf, "time");
 
     if((strlen(buf) > 0) && buf[strlen(buf) - 1] == '\n')
         buf[strlen(buf) - 1] = '\0';
 
     bufptr = buf;
-    sleep(1);
     if ((numbytes = send(sockfd, buf, strlen(buf) + 1, 0)) == -1) {
         perror("send");
         exit(1);
     }
-
+    printf("client sent\n");
     sleep(1);
     if ((numbytes = recv(sockfd, buf, MAXDATASIZE-1, 0)) == -1) {
         perror("recv");

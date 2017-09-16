@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -pedantic -Wextra -Wall -g
+CFLAGS = -std=c89 -pedantic -Wextra -Wall -g
 LDFLAGS = -lpthread
 SOURCES = server.c manager.c
 OBJECTS = $(SOURCES:.c=.o)

@@ -18,6 +18,8 @@ int main(int argc, char *argv[])
     int tcplisten;
     int udplisten;
     int threads;
+    pthread_t *t;
+    int epfd;
     struct tothread thrdinput;
     /* чтобы я мог по ^C выйти из цикла */
     struct sigaction sa;
@@ -32,33 +34,34 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-
-
     tcplisten = create_tcp_sock(argv[1]);
     udplisten = create_udp_socket(argv[2]);
-    
+    if ((epfd = epoll_create(MAX_CON)) == -1) {
+            perror("epoll_create");
+            exit(1);
+    }
+
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = tcplisten;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, tcplisten, &ev) < 0) {
+            perror("epoll_ctl");
+            exit(1);
+    }
+
     thrdinput.udpsock = udplisten;
     thrdinput.tcpsock = tcplisten;
     thrdinput.progname = argv[0];
-    pthread_t *t;
-    threads = 4;
+    thrdinput.epfd = epfd;
+
+
+    threads = 1;
     t = malloc(sizeof(pthread_t) * threads);
     pthread_create(&t[0], NULL, pmanage, &thrdinput);
-    pthread_create(&t[1], NULL, pmanage, &thrdinput);
-    pthread_create(&t[2], NULL, pmanage, &thrdinput);
-    pthread_create(&t[3], NULL, pmanage, &thrdinput);
-    while (keepRunning) {
-        if(state == NEWTHREAD) {
-            printf("--------------------\n");
-            printf("Creating new thread\n");
-            printf("--------------------\n");
-            threads++;
-            t = realloc(t, sizeof(pthread_t) * threads);
-            pthread_create(&t[threads-1], NULL, pmanage, &thrdinput);
-            state = RUNNING;
 
-        }
-    }
+    while (keepRunning) {}
+
+    printf("---++ %d ++---\n", threads);
     printf("\nконечная\n");
     return 0;
 
@@ -115,6 +118,7 @@ int create_tcp_sock(char *port)
     int tcplisten;
     memset(&hints, 0, sizeof(hints));
 
+    yes = 1;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
@@ -129,6 +133,11 @@ int create_tcp_sock(char *port)
         /* проверяем, получили ли мы сокет */
         if (tcplisten < 0)
             continue;
+
+        if (fcntl(tcplisten, F_SETFL,
+                  fcntl(tcplisten, F_GETFL, 0) | O_NONBLOCK) == -1) {
+            perror("server, fcntl:");
+        }
         /* мы хотим использовать именно этот адресс и порт */
         setsockopt(tcplisten, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 

@@ -21,7 +21,7 @@
 #include <time.h>
 
 /* пусть будет запросов, обрабатываемвых в очереди будет столько */
-#define MAX_CON (10)
+#define MAX_CON (100)
 #define BUFSIZE 256
 #define BACK_LOG 1024
 /* Поток, обрабатывающий запросы.
@@ -40,6 +40,7 @@ struct tothread{
     char *progname;
     int tcpsock;
     int udpsock;
+    int epfd;
 };
 
 

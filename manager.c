@@ -1,165 +1,137 @@
 #include "server.h"
+#include <assert.h>
+
 void *pmanage(void *args)
 {
     struct tothread inargs;
-    struct epoll_event *events;
+    struct epoll_event events[MAX_CON];
     struct sockaddr_in clientaddr;
 
-    struct msqid_ds bf; 
-    int fdmax;
-    int listener;
-    int newfd;
-    char buf[1024];
-    int nbytes;
-    socklen_t addrlen;
-    int yes;
-    int msquid;
-    int epfd = -1;
     struct epoll_event ev;
-    int index = 0;
-    int client_fd = -1;
-
+    struct msqid_ds bf; 
+    char buf[1024];
+    int tscpsock;
+    int newfd;
+    socklen_t addrlen;
+    int msquid;
+    int epfd;
+    int events_cnt;
     int connections =  1;
+    int index = 0;
     inargs = *((struct tothread *)args);
-    fdmax = listener = inargs.tcpsock;
-    
-    /* нарежем память под те события, которые мы готовы обработать за раз */
-    events = malloc(MAX_CON * sizeof(struct epoll_event));
-    /* создадим очередь */
-    if ((epfd = epoll_create(MAX_CON)) == -1) {
-            perror("epoll_create");
-            exit(1);
-    }
-    ev.events = EPOLLIN;
-    ev.data.fd = fdmax;
-    /* добавляем новый дескриптор */
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, fdmax, &ev) < 0) {
-            perror("epoll_ctl");
-            exit(1);
-    }
+    tscpsock = inargs.tcpsock;
+    epfd = inargs.epfd;
+
 
     /* создаем новую очередь сообщений.
-     * В ней будем хранить все TCP сокеты. UDP сокеты обрабатываем
-     * сразу по получении, поэтому хранить их тут не вижу смысла 
-     * выкидывать сокеты будем по мере необходимости.
      * В случае экстренного звершения программы мы должны закрыть все сокеты.
      */
+
+
     msquid = create_msqid(inargs.progname, pthread_self());
+    printf("msquid = %d\n", msquid);
     msgctl(msquid, IPC_STAT, &bf);
-    if (bf.msg_qnum != 0) {
+
+    while (bf.msg_qnum != 0) {
         msgctl(msquid, IPC_RMID, NULL);
         msquid = create_msqid(inargs.progname, pthread_self());
+        msgctl(msquid, IPC_STAT, &bf);
     }
-    for(;;){
+ 
+        printf("EPOLL WAIT\n");
+    while ((events_cnt = epoll_wait(epfd, events, MAX_CON, -1)) > 0){
 
         /* ждем пока не придет событие */
         /* epfd - указатель на структуру epoll в ядре 
          * events - куда вернуть результат
          * MAX_CON - количество обрабатываемых запросов
-         * -1 - заблокироваться навечно(до получения запроса)
+         * -1 - заблокироваться до получения запроса
          */
-
         msgctl(msquid, IPC_STAT, &bf);
-        printf("connections: %d --- quesize: %d\n",connections, bf.msg_qnum);
-        epoll_wait(epfd, events, MAX_CON, -1);
-        for (index = 0; index < MAX_CON; index++) {
-            client_fd = events[index].data.fd;
+        printf("i = %d, connections: %d --- ID %d -- quesize: %d\n",
+                index,connections,(int)pthread_self(),(int)bf.msg_qnum);
+        printf("EPOLL DONE %d\n", events_cnt);
+        for (index = 0; index < events_cnt ; index++) {
+            assert(events[index].data.fd);
+            printf("ITERATION - %d\n", events[index].data.fd);
             /* если подключается новый клиент */
             /* TODO: проверить на UDP сокет*/
-#if 0
-            if(connections + 2 == MAX_CON){
-                /*
-                printf("Не справляюсь, создаю новый поток\n");
-                */
-                state = NEWTHREAD;
-                break;
-            }
-#endif
-            if (client_fd == listener) {
+            if (events[index].data.fd == tscpsock) {
                 printf("LISTENER\n");
-                addrlen = sizeof(clientaddr);
-                if ((newfd = accept(listener, 
-                                    (struct sockaddr *)&clientaddr,
-                                    &addrlen)) == -1) {
-                    perror("server: accept() error ");
-                } else {
-                    printf("server: подключается %s...\n", inet_ntoa(clientaddr.sin_addr));
-                    /* https://stackoverflow.com/a/22339017 */
-                    if (fcntl(newfd, F_SETFL,
-                               fcntl(newfd, F_GETFL, 0) | O_NONBLOCK) == -1){
-                        perror("calling fcntl");
-                    }
-                    ev.events = EPOLLIN;
-                    ev.data.fd = newfd;
-                    if (epoll_ctl(epfd, EPOLL_CTL_ADD, newfd, &ev) < 0) {
-                        perror("epoll_ctl");
-                        exit(1);
-                    }
-                    connections++;
-                    /* добавляем новый дескриптор в очередь сообщений.
-                     * Так как уникальность каждого дескриптора гарантирована, 
-                     * мы можем использовать его так же в качестве значения
-                     * для поля type.
-                     */
-                    toqueue(msquid, newfd, newfd);
-                    /* TODO: прчоекай, не нужно ли создать новый поток */
+                while(1){
+                    addrlen = sizeof(clientaddr);
+                    if ((newfd = accept(tscpsock, (struct sockaddr *)&clientaddr,
+                                        &addrlen)) < 0) {
+                        if((errno == EAGAIN) || (errno == EWOULDBLOCK)){
+                            break;
+                        }
+                        perror("server: accept() error ");
+                    } else {
+                        printf("server: подключается %s -- socket: %d...\n",
+                                inet_ntoa(clientaddr.sin_addr), newfd);
+
+                        ev.events = EPOLLIN | EPOLLET;
+                        ev.data.fd = newfd;
+                        if (epoll_ctl(epfd, EPOLL_CTL_ADD, newfd, &ev) < 0) {
+                            perror("epoll_ctl");
+                            close(newfd);
+                            continue;
+                        }
+                        connections++;
+                        /* добавляем новый дескриптор в очередь сообщений.
+                         * Так как уникальность каждого дескриптора гарантирована, 
+                         * мы можем использовать его так же в качестве значения
+                         * для поля type.
+                         */
+                        toqueue(msquid, newfd, newfd);
+                        printf("++++===NEW QUEUED===++++\n");
+                        /* TODO: прчоекай, не нужно ли создать новый поток */
+                        }
                 }
-                break;
             } else {
+                printf("ELSE\n");
                 /* Note that when reading from a channel such as a pipe or a
                  * stream socket, event EPOLLHUP merely indicates that the peer
                  * closed its end of the channel.
                  */
-                if (events[index].events & EPOLLHUP) {
-                    printf("EPOLLHUP\n");
-                    if (epoll_ctl(epfd, EPOLL_CTL_DEL, client_fd, &ev) < 0) {
+                if ((events[index].events & EPOLLHUP) ||
+                    (events[index].events & EPOLLRDHUP)) {
+                    if (epoll_ctl(epfd, EPOLL_CTL_DEL, events[index].data.fd, NULL) < 0) {
                             perror("epoll_ctl");
                     }
-                    /* TODO: проверяй, выкинулось ли правильно */
-                    todequeue(msquid, client_fd);
+                    todequeue(msquid, events[index].data.fd);
                     connections--;
-                    close(client_fd);
-                    break;
+                    close(events[index].data.fd);
                 }
                 /* есть входящий запрос */
-                if (events[index].events & EPOLLIN)  {
-                    /* если ничего не пришло */
-                    /* TODO: перепиши */
+                if (events[index].events & EPOLLIN)  { 
                     printf("EPOLLIN\n");
-                    if((nbytes = gettcpmsg(client_fd, buf)) <= 0){
-                        printf("EPOLLIN < 0\n");
-                        if(nbytes == 0) {
-                            printf("socket %d hung up, closing\n", client_fd);
-                        }
-                        else {
-                            printf("recv() error ! %d", client_fd);
-                            perror("");
-                        }
-                        /* выкинем его из списка */
-                        if (epoll_ctl(epfd, EPOLL_CTL_DEL, client_fd, &ev) < 0) {
-                            perror("epoll_ctl");
-                        }
-                        todequeue(msquid, client_fd);
-                        connections--;
-                        close(client_fd);
-                        break;
-                    } else {
+                    if(gettcpmsg(events[index].data.fd, buf) > 0){
                         printf("WANT TO REPLY\n");
-                        /* Отвечаем сразу, не хочу пилить стопицот буферов */
                         strret(buf);
-                        sendtcpmsg(client_fd, buf); 
-                        todequeue(msquid, client_fd);
-                        if (epoll_ctl(epfd, EPOLL_CTL_DEL, client_fd, &ev) < 0) {
+                        printf("REPLYING...\n");
+                        sendtcpmsg(events[index].data.fd, buf); 
+                        printf("DONE REPLYING\n");
+                        if (epoll_ctl(epfd, EPOLL_CTL_DEL, events[index].data.fd, NULL) < 0) {
                             perror("epoll_ctl");
                         }
+                        todequeue(msquid, events[index].data.fd);
                         connections--;
-                        close(client_fd);
-                        break;
+                        close(events[index].data.fd);
+                        printf("DEQUEUED\n");
                     }
-                } 
+
+                 }
+
             }
         }
+        msgctl(msquid, IPC_STAT, &bf);
+
+        printf("i = %d, connections: %d --- ID %d -- quesize: %d\n",
+                index,connections,(int)pthread_self(),(int)bf.msg_qnum);
+        printf("EPOLL WAIT\n");
     }
+    return (void *) 0;
 }
 
 /* выбираем что послать */
@@ -182,25 +154,30 @@ void strret(char *str)
 /* вытаскиваем сообщение из очереди */
 int todequeue(int msquid, int id)
 {
+
     struct quebuf tmp;
     int ret;
-    /* TODO: чекнуть, чтобы оно на самом деле выкинулось */
-    ret = msgrcv(msquid, &tmp, sizeof(tmp.sockfd), id, IPC_NOWAIT);
-
+    /* На самом деле я должен указывать размер массива char, но мало того, что
+     * я использую просто переменную int, так еще и  sizeof(int) не работает */
+    ret = msgrcv(msquid, &tmp, sizeof(tmp), id, IPC_NOWAIT);
+    if (ret == -1) {
+        perror("todequeue");
+    }
     return ret;
 }
 /* записываем в очередь новое сообзение */
 void toqueue(int msqid, int sockfd, int id)
 {
     struct quebuf tmp;
-    int size;
+    int retval;
 
     tmp.type = id;
     tmp.sockfd = sockfd;
 
-    /* TODO: чекнуть, что добавилось в очередь */
-    msgsnd(msqid, (void *) &tmp, sizeof(tmp.sockfd), IPC_NOWAIT);
-
+    retval = msgsnd(msqid, (void *) &tmp, sizeof(tmp), 0);
+    if (retval == -1) {
+        perror("msgsnd");
+    }
 }
 
 /* принимаем сообщение от TCP-клиента */
@@ -211,32 +188,44 @@ int gettcpmsg(int sockfd, char *str)
     char *fp;
     fp = str;
     len = got = 0;
+    printf("GETTING\n");
     while(1) {
         len = recv(sockfd, fp, BUFSIZE,0);
-        if (len == -1 && errno == EAGAIN)
+        printf("GETTING...%d\n", len);
+        if(len == 0){
             break;
-        if(len == 0)
-            break;
-        if(len >=0)
+        }
+        if(len >=0){
+            fp += len;
             got += len;
-        fp+=len -1;
+        }
+        if (len == -1 || (errno == EAGAIN || errno == EWOULDBLOCK)){
+            break;
+        }
     }
+    printf("GOT %d\n", got);
     return got;
 
 }
+
 /* посылаем сообщение TCP-клиенту */
 void sendtcpmsg(int sockfd, char *str)
 {
     int len;
     char *fp;
     fp = str;
+    printf("SENDING\n");
     while(1) {
+        printf("SENDING...\n");
         len = send(sockfd, fp, strlen(fp),0);
-        if (len == -1 && errno == EAGAIN)
+        if (len == -1 && errno == EAGAIN ){
+            perror("send");
             break;
+        }
         if(len == 0)
             break;
         fp+=len;
+        printf("%s\n", fp);
     }
 }
 /* получаем сообщение от UDP сокета */
@@ -250,8 +239,7 @@ void getudpmsg(int sockfd, char *buf,
     *addr_len = sizeof *their_addr;
     fp = buf;
     while(1) {
-        numbytes = recvfrom(sockfd, fp, BUFSIZE , 0,
-                          their_addr, addr_len);
+        numbytes = recvfrom(sockfd, fp, BUFSIZE , 0, their_addr, addr_len);
         if (numbytes == -1 && errno == EAGAIN)
             break;
         if(numbytes == 0)
@@ -282,12 +270,24 @@ int create_msqid(char *progname, int pid)
 {
     int   msqid;
     key_t key;
+    /* The  ftok() function uses the identity of the file named by the 
+     * given pathname (which must refer to an existing, accessible file) 
+     * and the least significant ** 8 bits ** of proj_id
+     * (which must be nonzero) to generate a key_t
+     */
+
+    /* Короче, phtread_self() выдает что-то типа -1312262400, что в двоичном
+     * представлении - -0b1001110001101111000100100000000. И так у меня 
+     * получалось со всеми потоками. То есть, второй аргумент ftok всегда
+     * был 0 и мне возвращалась одна и та же очередь
+     */
+    
+    pid = pid >> 8;
     if((key = ftok(progname, pid)) == -1){
         fprintf(stderr, "server: Key generate error\n");
         exit(2);
     }
-
-    if((msqid = msgget(key, (IPC_CREAT | 0644))) == -1 ){
+       if((msqid = msgget(key, (IPC_CREAT | 0644))) == -1 ){
         fprintf(stderr, "server: can't get msqid\n");
         exit(2);
     }
