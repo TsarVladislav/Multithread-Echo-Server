@@ -6,8 +6,9 @@
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER ;
 /* хочу завершить выполнение программы на ^C и освободить память */
-static volatile int keepRunning = 1;
+volatile int keepRunning = 1;
 void intHandler(int dummy) {
+    printf("Handle\n");
     keepRunning = 0;
 }
 
@@ -16,6 +17,7 @@ int main(int argc, char *argv[])
 
     /* десриптор сокета, который мы слушаем */
     int tcplisten;
+    struct epoll_event ev;
     int udplisten;
     int threads;
     pthread_t *t;
@@ -41,10 +43,15 @@ int main(int argc, char *argv[])
             exit(1);
     }
 
-    struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = tcplisten;
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, tcplisten, &ev) < 0) {
+            perror("epoll_ctl");
+            exit(1);
+    }
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = udplisten;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, udplisten, &ev) < 0) {
             perror("epoll_ctl");
             exit(1);
     }
@@ -58,9 +65,7 @@ int main(int argc, char *argv[])
     threads = 1;
     t = malloc(sizeof(pthread_t) * threads);
     pthread_create(&t[0], NULL, pmanage, &thrdinput);
-
-    while (keepRunning) {}
-
+    while(keepRunning);
     printf("---++ %d ++---\n", threads);
     printf("\nконечная\n");
     return 0;

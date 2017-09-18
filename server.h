@@ -57,11 +57,11 @@ int todequeue(int msquid, int id);
 void toqueue(int msqid, int sockfd, int id);
 int gettcpmsg(int sockfd, char *str);
 void sendtcpmsg(int sockfd, char *str);
-void getudpmsg(int sockfd, char *buf,
+int getudpmsg(int sockfd, char *str,
                struct sockaddr *their_addr,
                socklen_t *addr_len);
 
-void sendudpmsg(int sockfd, char *fp, struct  sockaddr *their_addr, socklen_t *addrlen);
+void sendudpmsg(int sockfd, char *str, struct  sockaddr *their_addr, socklen_t *addrlen);
 
 int create_msqid(char *progname, int pid);
 #endif

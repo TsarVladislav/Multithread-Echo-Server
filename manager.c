@@ -1,6 +1,8 @@
 #include "server.h"
 #include <assert.h>
 
+extern int keepRunning;
+extern pthread_mutex_t mutex;
 void *pmanage(void *args)
 {
     struct tothread inargs;
@@ -8,9 +10,11 @@ void *pmanage(void *args)
     struct sockaddr_in clientaddr;
 
     struct epoll_event ev;
+    struct sockaddr their_addr;
     struct msqid_ds bf; 
     char buf[1024];
     int tscpsock;
+    int udpsock;
     int newfd;
     socklen_t addrlen;
     int msquid;
@@ -20,8 +24,8 @@ void *pmanage(void *args)
     int index = 0;
     inargs = *((struct tothread *)args);
     tscpsock = inargs.tcpsock;
+    udpsock = inargs.udpsock;
     epfd = inargs.epfd;
-
 
     /* создаем новую очередь сообщений.
      * В случае экстренного звершения программы мы должны закрыть все сокеты.
@@ -29,18 +33,22 @@ void *pmanage(void *args)
 
 
     msquid = create_msqid(inargs.progname, pthread_self());
-    printf("msquid = %d\n", msquid);
     msgctl(msquid, IPC_STAT, &bf);
-
+    printf("msquid = %d, size = %d\n", msquid, (int)bf.msg_qnum);
+/*
     while (bf.msg_qnum != 0) {
         msgctl(msquid, IPC_RMID, NULL);
         msquid = create_msqid(inargs.progname, pthread_self());
         msgctl(msquid, IPC_STAT, &bf);
     }
- 
+ */
         printf("EPOLL WAIT\n");
-    while ((events_cnt = epoll_wait(epfd, events, MAX_CON, -1)) > 0){
+    while ((events_cnt = epoll_wait(epfd, events, MAX_CON, -1))){
 
+        if(connections == 1 && keepRunning == 0){
+            printf("ой вэй\n");
+            return (void *) 0;
+        }
         /* ждем пока не придет событие */
         /* epfd - указатель на структуру epoll в ядре 
          * events - куда вернуть результат
@@ -54,6 +62,15 @@ void *pmanage(void *args)
         for (index = 0; index < events_cnt ; index++) {
             assert(events[index].data.fd);
             printf("ITERATION - %d\n", events[index].data.fd);
+            if(keepRunning == 0) {
+
+                    if (epoll_ctl(epfd, EPOLL_CTL_DEL, events[index].data.fd, NULL) < 0) {
+                            perror("epoll_ctl");
+                    }
+                    todequeue(msquid, events[index].data.fd);
+                    connections--;
+                    close(events[index].data.fd);
+            }
             /* если подключается новый клиент */
             /* TODO: проверить на UDP сокет*/
             if (events[index].data.fd == tscpsock) {
@@ -88,7 +105,19 @@ void *pmanage(void *args)
                         /* TODO: прчоекай, не нужно ли создать новый поток */
                         }
                 }
-            } else {
+            } else if(events[index].data.fd == udpsock) {
+                addrlen = sizeof(their_addr);
+                if(getudpmsg(events[index].data.fd, buf, &their_addr, &addrlen) > 0){
+                        printf("WANT TO REPLY\n");
+                        strret(buf);
+                        printf("REPLYING...\n");
+                        sendudpmsg(events[index].data.fd, buf, &their_addr, &addrlen); 
+                        printf("DONE REPLYING\n");
+                    }
+
+
+            
+            }else {
                 printf("ELSE\n");
                 /* Note that when reading from a channel such as a pipe or a
                  * stream socket, event EPOLLHUP merely indicates that the peer
@@ -126,11 +155,11 @@ void *pmanage(void *args)
             }
         }
         msgctl(msquid, IPC_STAT, &bf);
-
         printf("i = %d, connections: %d --- ID %d -- quesize: %d\n",
                 index,connections,(int)pthread_self(),(int)bf.msg_qnum);
         printf("EPOLL WAIT\n");
     }
+    printf("выход\n");
     return (void *) 0;
 }
 
@@ -229,39 +258,55 @@ void sendtcpmsg(int sockfd, char *str)
     }
 }
 /* получаем сообщение от UDP сокета */
-void getudpmsg(int sockfd, char *buf,
+int getudpmsg(int sockfd, char *str,
                struct sockaddr *their_addr,
-               socklen_t *addr_len)
+               socklen_t *addrlen)
 {
 
+    int len;
+    int got;
     char *fp;
-    int numbytes;
-    *addr_len = sizeof *their_addr;
-    fp = buf;
+    fp = str;
+    len = got = 0;
+    printf("GETTING\n");
     while(1) {
-        numbytes = recvfrom(sockfd, fp, BUFSIZE , 0, their_addr, addr_len);
-        if (numbytes == -1 && errno == EAGAIN)
+        len = recvfrom(sockfd, fp, BUFSIZE , 0, their_addr, addrlen);
+        printf("GETTING...%d\n", len);
+        if(len == 0){
             break;
-        if(numbytes == 0)
+        }
+        if(len >=0){
+            fp += len;
+            got += len;
+        }
+        if (len == -1 || (errno == EAGAIN || errno == EWOULDBLOCK)){
             break;
-        fp+=numbytes;
+        }
     }
-
+    printf("GOT %d\n", got);
+    return got;
 }
 
 /* посылаем сообщение UDP сокету */
-void sendudpmsg(int sockfd, char *fp, struct  sockaddr *their_addr, socklen_t *addrlen)
+void sendudpmsg(int sockfd, char *str, struct  sockaddr *their_addr, socklen_t *addrlen)
 {
+
     int len;
-    char *p;
-    p = fp;
+    char *fp;
+    fp = str;
+    printf("SENDING UDP\n");
     while(1) {
-        len = sendto(sockfd, p, strlen(p), 0, their_addr, *addrlen);
-        if (len == -1 && errno == EAGAIN)
+        printf("SENDING... UDP\n");
+        len = sendto(sockfd, fp, strlen(fp), 0, their_addr, *addrlen);
+        printf("%d\n", len);
+        if (len == -1 && errno == EAGAIN ){
+            perror("send");
             break;
+        }
         if(len == 0)
             break;
-        p+=len;
+        fp+=len;
+        printf("%s\n", fp);
     }
 }
 
