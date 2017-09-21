@@ -5,6 +5,7 @@
 #include "server.h"
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER ;
+int state;
 /* хочу завершить выполнение программы на ^C и освободить память */
 volatile int keepRunning = 1;
 void intHandler(int dummy) {
@@ -61,11 +62,22 @@ int main(int argc, char *argv[])
     thrdinput.progname = argv[0];
     thrdinput.epfd = epfd;
 
+    state = RUNNING;
 
     threads = 1;
     t = malloc(sizeof(pthread_t) * threads);
     pthread_create(&t[0], NULL, pmanage, &thrdinput);
-    while(keepRunning);
+    while(keepRunning){
+        if(state == NEWTHREAD){
+            threads++;
+            t =  realloc(t,sizeof(pthread_t) * threads);
+            pthread_create(&t[threads - 1], NULL, pmanage, &thrdinput);
+            state = RUNNING;
+            printf("CREATING THREAD\n");
+        }
+
+
+    }
     printf("---++ %d ++---\n", threads);
     printf("\nконечная\n");
     return 0;

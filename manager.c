@@ -3,6 +3,7 @@
 
 extern int keepRunning;
 extern pthread_mutex_t mutex;
+extern state;
 void *pmanage(void *args)
 {
     struct tothread inargs;
@@ -45,6 +46,12 @@ void *pmanage(void *args)
         printf("EPOLL WAIT\n");
     while ((events_cnt = epoll_wait(epfd, events, MAX_CON, -1))){
 
+        if(events_cnt == MAX_CON){
+            state = NEWTHREAD;
+            printf("STATE CHANGED\n");
+            continue;
+        }
+        
         if(connections == 1 && keepRunning == 0){
             printf("ой вэй\n");
             return (void *) 0;
@@ -114,9 +121,6 @@ void *pmanage(void *args)
                         sendudpmsg(events[index].data.fd, buf, &their_addr, &addrlen); 
                         printf("DONE REPLYING\n");
                     }
-
-
-            
             }else {
                 printf("ELSE\n");
                 /* Note that when reading from a channel such as a pipe or a
